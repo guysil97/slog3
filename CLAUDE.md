@@ -9,9 +9,8 @@ into a clean 10-bit ProRes 4444 file encoded as S-Gamut3.Cine / S-Log3.
 - Full run: `python to_slog3.py clip.mp4` (parallel by default; `--workers 1` for single process)
 - Deliver a clip with verification (frame count, rate, frame alignment start/middle/end):
   `python deliver.py clip.mp4 --name grinder -- --gamma 2.4 --exposure 2 --no-deband`
-  NOTE: deliver.py was written at the end of the cloud session and NOT yet run end to end. Test it
-  on a short clip first (e.g. pass `--frames 20` after `--`; the frame-count check will then fail
-  by design, which is itself a test that the check works) before trusting it on a delivery.
+  Tested end to end on the grinder delivery (299 frames): frame count, rate and alignment checks
+  passed with clear margins (own frame err ~0.4, neighbours 1.0-3.1, 8-bit units).
 - Dependencies install themselves (numpy via pip; ffmpeg via system or `imageio-ffmpeg` fallback).
   Override ffmpeg with `FFMPEG=/path/to/ffmpeg`. The selftest's tag check needs `ffprobe` and is
   skipped (with a message) when only the imageio-ffmpeg binary is available.
@@ -86,3 +85,16 @@ into a clean 10-bit ProRes 4444 file encoded as S-Gamut3.Cine / S-Log3.
 
 ## Earlier measurement (10 frames, BEFORE the swscale gain fix)
 Luma codes: 0.1% = 97, median = 133, 99.9% = 559, max = 614. Superseded by the section above.
+
+## Grinder delivery (done)
+- Uploaded as three Resolve re-exports (H.264 1920x1080, 2.35:1 picture letterboxed at rows 132-947,
+  bars at Y=0), named by start frame 0 / 100 / 205 with OVERLAPPING handles: 108 / 114 / 94 frames.
+  Content matching: seg2[0] == seg1[100], seg3[0] == seg2[105].
+- Resolve did NOT change levels or colour (picture-area comparison with the 5K excerpt: identical Y
+  per level, identical chroma, frame 0 == frame 0). It did downscale 5084x2160 -> 1920x816.
+- Stitched bit-exact (100 + 105 + 94 = 299 frames, audio cut at 160000 / 168000 samples @ 48k),
+  cropped to 1920x816, lossless FFV1 intermediate, then
+  `deliver.py ... -- --gamma 2.4 --exposure 2 --no-deband`. Output ProRes 4444 1920x816, 30/1,
+  299 frames, 296 MiB, sha256 2c9ab8a1a00f88f8fef224dc6acb52b5e6f75022022673bc674e1d8a31afaecb.
+- If the original was 300 frames, the uploaded segments end one frame short (last = 298).
+- A 5K version needs the ORIGINAL file (byte `split`, not a Resolve export).

@@ -35,6 +35,8 @@ def sha256(path):
 
 def reassemble(src, out):
     src = Path(src)
+    if not src.exists():
+        sys.exit(f"ERROR: not found: {src}")
     if src.is_file():
         return src
     parts = sorted(p for p in src.iterdir() if p.is_file() and not p.name.startswith("."))
