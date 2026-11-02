@@ -42,6 +42,17 @@ into a clean 10-bit ProRes 4444 file encoded as S-Gamut3.Cine / S-Log3.
   camera S-Log3. Check against a real Sony clip before changing anything.
 - This tool cannot add dynamic range or colour that the source never had.
 
+## Target project (confirmed by the user)
+- The scene the AI shot cuts into: Sony FX6, `CaptureGammaEquation=s-log3-cine`,
+  `CaptureColorPrimaries=s-gamut3-cine` -> exactly what this tool writes. Timeline 25 fps.
+- The AI clip is 30 fps. Do NOT change the frame rate; the tool keeps the source rate (conform is
+  done in Resolve).
+- Reference export `log_ex.mov` (Resolve H.264 8-bit, 1080p, 2.84:1 letterbox burned in at Y=16).
+  Picture area only (rows 202-877), x4 to 10-bit: 0.1% ~148, median ~296, 99.9% ~500, max ~560.
+  That scene was UNDER-exposed on purpose/by accident: it is not an exposure target. Place the AI
+  shot by Sony's standard (18% grey -> 420), not by matching this clip's median.
+- Noise cannot be measured from that export (H.264 removed it; temporal std = 0).
+
 ## Performance
 - numpy per 5084x2160 frame: ~2.0 s. ffmpeg reader (deband + spline 4:2:0->4:4:4): ~0.6 s/frame.
   ProRes 4444 encode: ~0.4 s/frame. The reader is single-threaded and sets a ceiling of ~1.6 fps.
