@@ -7,6 +7,11 @@ into a clean 10-bit ProRes 4444 file encoded as S-Gamut3.Cine / S-Log3.
 - Self-test (run this first, after any change): `python to_slog3.py --selftest`
 - Quick test on a few frames: `python to_slog3.py clip.mp4 --frames 20 -o /tmp/test.mov`
 - Full run: `python to_slog3.py clip.mp4` (parallel by default; `--workers 1` for single process)
+- Deliver a clip with verification (frame count, rate, frame alignment start/middle/end):
+  `python deliver.py clip.mp4 --name grinder -- --gamma 2.4 --exposure 2 --no-deband`
+  NOTE: deliver.py was written at the end of the cloud session and NOT yet run end to end. Test it
+  on a short clip first (e.g. pass `--frames 20` after `--`; the frame-count check will then fail
+  by design, which is itself a test that the check works) before trusting it on a delivery.
 - Dependencies install themselves (numpy via pip; ffmpeg via system or `imageio-ffmpeg` fallback).
   Override ffmpeg with `FFMPEG=/path/to/ffmpeg`. The selftest's tag check needs `ffprobe` and is
   skipped (with a message) when only the imageio-ffmpeg binary is available.
