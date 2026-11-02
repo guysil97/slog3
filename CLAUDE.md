@@ -61,9 +61,23 @@ into a clean 10-bit ProRes 4444 file encoded as S-Gamut3.Cine / S-Log3.
 - Memory: ~4.4 GB total with 3 workers at 5084x2160. Auto = cores-1, capped at 4.
 - Next step if still too slow: ffmpeg `-filter_threads` for the reader, or a lighter upsampler.
 
-## Verified on the real clip (10 frames, BEFORE the swscale gain fix)
-Output: ProRes 4444, 5084x2160, PCM audio. ffprobe may report the pixel format as yuv444p12le;
-that is normal for ProRes 4444 (10-bit data in a 12-bit-capable container).
-Luma codes on the test clip: 0.1% = 97, median = 133, 99.9% = 559, max = 614 (a dark shot; whites
-sit near 610 because display white 1.0 maps to S-Log3 ~0.596). With the fix, expect the upper values
-~2 codes lower (e.g. max ~611). Re-measure when the clip is available again.
+## The real AI clip (measured on an 85-frame excerpt, after all fixes)
+- openart export: HEVC Main 8-bit 4:2:0, 5084x2160, 30 fps (tbr 30; ffmpeg's *average* "fps" said
+  29.56 on the stream-copied excerpt - `parse_rate()` now prefers tbr, `--fps` overrides).
+  No colour tags. Low-key meat-grinder close-up, dark teal background.
+- Source is NOT crushed: 0.09% of pixels at Y8 <= 20, floor ~27-31, max 237, nothing clipped.
+- S-Log3 deep-shadow precision: S-Log3 is linear below code 171, so 10-bit S-Log3 has FEWER levels
+  than 8-bit gamma 2.4 near black (Y8 16-30 -> only ~10 S-Log3 codes). Round trip back to Rec.709 2.4,
+  p99 error in 8-bit units, no deband: exposure +0 -> 2.8 (darks 3.2), +1 -> 1.7, +2 -> 1.4 (darks 1.0).
+  Recommendation for this shot: `--exposure 2`, and the colorist pulls -2 stops after the CST.
+  Subject (meat) median code: +0 -> 162, +1 -> 210, +2 -> 267. Max at +2 = 765 (no clipping).
+- Deband (thr 0.02) on this clip changes the textured meat more than the background (mean 1.78 vs 0.70
+  8-bit levels) and visibly softens it; the background shows no banding without it even at x12 gain.
+  Recommendation for this shot: `--no-deband`. Default left on for other material.
+- Gamma: choose the inverse of the project's output transform. CST S-Log3 -> Rec.709 Gamma 2.4 with
+  tone mapping = None gives an exact round trip with `--gamma 2.4`. `srgb`/`2.2` lift the shadows on
+  the way back (useful only as a look, which belongs in the grade).
+- Speed on this container: ~1.4-2.1 s/frame at 5084x2160.
+
+## Earlier measurement (10 frames, BEFORE the swscale gain fix)
+Luma codes: 0.1% = 97, median = 133, 99.9% = 559, max = 614. Superseded by the section above.

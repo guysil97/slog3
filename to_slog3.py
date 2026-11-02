@@ -167,14 +167,31 @@ def probe(ff, path):
     if not vline:
         sys.exit(f"ERROR: no video stream found in {path}\n{txt[-500:]}")
     m = re.search(r"[\s,](\d{2,5})x(\d{2,5})[\s,\[]", vline)
-    f = re.search(r"(\d+(?:\.\d+)?)\s*fps", vline)
+    f = parse_rate(vline)
     if not m or not f:
         sys.exit(f"ERROR: could not parse size/fps from: {vline}")
     matrix = "bt709"
     if re.search(r"smpte170m|bt470bg", vline):
         matrix = "bt601"
-    return dict(w=int(m.group(1)), h=int(m.group(2)), fps=exact_fps(f.group(1)),
+    return dict(w=int(m.group(1)), h=int(m.group(2)), fps=f,
                 matrix=matrix, has_audio="Audio:" in txt, vline=vline.strip())
+
+
+def parse_rate(vline):
+    """Frame rate from ffmpeg's stream line. Prefer 'tbr' (the stream's real frame rate) over
+    'fps' (the *average*, which a trimmed/stream-copied clip skews, e.g. 29.56 for a 30 fps file)."""
+    fps = re.search(r"(\d+(?:\.\d+)?)\s*fps", vline)
+    tbr = re.search(r"(\d+(?:\.\d+)?)(k?)\s*tbr", vline)
+    if tbr and not tbr.group(2):
+        rate = tbr.group(1)
+        if fps and abs(float(fps.group(1)) - float(rate)) > 0.01:
+            print(f"[warn] average fps {fps.group(1)} != stream rate {rate} tbr; using {rate}. "
+                  f"Override with --fps if needed.", file=sys.stderr)
+    elif fps:
+        rate = fps.group(1)
+    else:
+        return None
+    return exact_fps(rate)
 
 
 def exact_fps(s):
@@ -222,6 +239,8 @@ def convert(args):
         sys.exit(f"ERROR: input not found: {src}")
     out = Path(args.output) if args.output else src.with_name(f"{src.stem}_SLog3_SGamut3Cine.mov")
     info = probe(ff, src)
+    if args.fps:
+        info["fps"] = args.fps
     matrix_name = info["matrix"] if args.matrix == "auto" else args.matrix
     w, h = info["w"], info["h"]
     print(f"[info] {src.name}: {w}x{h} @ {info['fps']} fps, matrix={matrix_name}, audio={info['has_audio']}")
@@ -356,6 +375,19 @@ def selftest():
         ok &= flag
         print(f"exact_fps({s_in!r}) = {got!r}  expected {exp_fps!r}  {'OK' if flag else 'FAIL'}")
 
+    # frame rate from ffmpeg stream lines (tbr wins over the average 'fps')
+    lines = {
+        "Video: hevc (Main), yuv420p(tv, progressive), 5084x2160, 51703 kb/s, 29.56 fps, 30 tbr, 15360 tbn": "30",
+        "Video: h264 (High), yuv420p(tv, bt709), 1920x1080, 23.98 fps, 23.98 tbr, 24k tbn": "24000/1001",
+        "Video: h264 (High), yuv420p, 1280x720, 25 fps, 25 tbr, 12800 tbn": "25",
+        "Video: prores, yuv444p12le, 1920x1080, 30 fps": "30",
+    }
+    for line, exp_fps in lines.items():
+        got = parse_rate(line)
+        flag = got == exp_fps
+        ok &= flag
+        print(f"parse_rate(...{line[-34:]!s}) = {got!r}  expected {exp_fps!r}  {'OK' if flag else 'FAIL'}")
+
     # Patches: display grey whose linear value is 0 / 0.18 / 0.90 under gamma 2.4, then
     # saturated red, green, blue and a skin-ish tone, to test chroma scaling end to end.
     lut = build_eotf_lut("2.4")
@@ -441,6 +473,8 @@ def main():
     p.add_argument("--workers", type=int, default=0,
                    help="parallel processes (0 = auto: cores-1, max 4; 1 = single process)")
     p.add_argument("--seed", type=int, default=12345, help="dither/grain RNG seed")
+    p.add_argument("--fps", help="force the output frame-rate tag (e.g. 30 or 30000/1001); "
+                                 "never drops or duplicates frames")
     p.add_argument("--selftest", action="store_true")
     a = p.parse_args()
     if a.selftest:
