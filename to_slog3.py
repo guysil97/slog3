@@ -216,14 +216,20 @@ def reader_cmd(ff, src, info, deband, thr, matrix):
             "-f", "rawvideo", "-pix_fmt", "rgb48le", "-"]
 
 
-def writer_cmd(ff, out, info, src_for_audio, range_mode, w, h):
-    """Input is already yuv444p10le from numpy: no scaling/conversion here, only encode + tag."""
+def writer_cmd(ff, out, info, src_for_audio, range_mode, w, h, max_frames=0):
+    """Input is already yuv444p10le from numpy: no scaling/conversion here, only encode + tag.
+
+    Never use -shortest: it trims the *picture* to the audio length (an AI clip whose audio is
+    25 ms short lost its last frame). Audio is only cut when --frames limits the video."""
     rng = "tv" if range_mode == "legal" else "pc"
     cmd = [ff, "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "yuv444p10le",
            "-color_range", rng, "-colorspace", "bt709",
            "-s", f"{w}x{h}", "-r", str(info["fps"]), "-i", "-"]
     if src_for_audio and info["has_audio"]:
-        cmd += ["-i", str(src_for_audio), "-map", "0:v:0", "-map", "1:a:0", "-c:a", "pcm_s16le", "-shortest"]
+        if max_frames:
+            num, _, den = str(info["fps"]).partition("/")
+            cmd += ["-t", f"{max_frames * float(den or 1) / float(num):.6f}"]
+        cmd += ["-i", str(src_for_audio), "-map", "0:v:0", "-map", "1:a:0", "-c:a", "pcm_s16le"]
     cmd += ["-c:v", "prores_ks", "-profile:v", "4", "-pix_fmt", "yuv444p10le",
             "-vendor", "apl0", "-colorspace", "bt709", "-color_range", rng, str(out)]
     return cmd
@@ -256,7 +262,7 @@ def convert(args):
     werr = tempfile.TemporaryFile()
     reader = subprocess.Popen(reader_cmd(ff, src, info, not args.no_deband, args.deband_thr, matrix_name),
                               stdout=subprocess.PIPE, stderr=rerr, bufsize=w * h * 6)
-    writer = subprocess.Popen(writer_cmd(ff, out, info, src, args.range, w, h),
+    writer = subprocess.Popen(writer_cmd(ff, out, info, src, args.range, w, h, args.frames),
                               stdin=subprocess.PIPE, stderr=werr)
     nbytes = w * h * 6
     n, t0 = 0, time.time()
