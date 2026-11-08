@@ -116,7 +116,11 @@ def tpdf(rng, shape):
     return rng.random(shape, dtype=np.float32) - rng.random(shape, dtype=np.float32)
 
 
-def to_slog3_frame(rgb16, lut, matrix, gain, range_mode, rng, dither, grain):
+# Rec.709 luminance weights (linear light), used for luminance-preserving saturation changes
+LUM709 = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+
+
+def to_slog3_frame(rgb16, lut, matrix, gain, range_mode, rng, dither, grain, saturation=1.0):
     """uint16 HxWx3 full-range display RGB -> uint16 3xHxW planar yuv444p10le (Y, Cb, Cr).
 
     The RGB -> YCbCr matrix and range scaling are done here in float32, so the only
@@ -132,6 +136,12 @@ def to_slog3_frame(rgb16, lut, matrix, gain, range_mode, rng, dither, grain):
     lin = lut[rgb16]                                   # float32, linear Rec.709
     if gain != 1.0:
         lin *= np.float32(gain)
+    if saturation != 1.0:
+        # Scene-linear, luminance-preserving: AI video is a *rendered* image with the display
+        # LUT's saturation baked in; a colourist's log->display transform adds it again.
+        lum = (lin @ LUM709)[..., None]
+        lin = lum + np.float32(saturation) * (lin - lum)
+        np.maximum(lin, 0.0, out=lin)
     lin = lin @ matrix.T.astype(np.float32)            # -> S-Gamut3.Cine primaries
     code = slog3_oetf(lin) * np.float32(1023.0)        # 10-bit S-Log3 code values (float)
     ylo, yhi, clo, chi, cs = RANGES[range_mode]
@@ -251,11 +261,12 @@ def convert(args):
     w, h = info["w"], info["h"]
     print(f"[info] {src.name}: {w}x{h} @ {info['fps']} fps, matrix={matrix_name}, audio={info['has_audio']}")
     print(f"[info] gamma={args.gamma} exposure={args.exposure:+.2f} stops, deband={not args.no_deband}, "
-          f"range={args.range}, grain={args.grain}")
+          f"range={args.range}, grain={args.grain}, saturation={args.saturation}")
 
     workers = args.workers if args.workers > 0 else default_workers()
     params = dict(gamma=args.gamma, gain=2.0 ** args.exposure, range_mode=args.range,
-                  dither=not args.no_dither, grain=args.grain, seed=args.seed, shape=(h, w))
+                  dither=not args.no_dither, grain=args.grain, saturation=args.saturation,
+                  seed=args.seed, shape=(h, w))
     print(f"[info] workers={workers}")
 
     rerr = tempfile.TemporaryFile()
@@ -352,7 +363,7 @@ def _worker_frame(item):
     rgb16 = np.frombuffer(buf, dtype=np.uint16).reshape(h, w, 3)
     rng = np.random.default_rng([_W["seed"], i])
     return to_slog3_frame(rgb16, _W["lut"], _W["mat"], _W["gain"], _W["range_mode"], rng,
-                          _W["dither"], _W["grain"]).tobytes()
+                          _W["dither"], _W["grain"], _W["saturation"]).tobytes()
 
 
 # --------------------------------------------------------------------------- #
@@ -457,6 +468,26 @@ def selftest():
             good = tags.get("color_space") == "bt709" and tags.get("r_frame_rate") == "24000/1001"
             ok &= good
             print(f"file tags [{mode}] {tags}  {'OK' if good else 'FAIL'}")
+    # saturation: 1.0 is a no-op, grey is untouched, 0 gives neutral chroma, luminance preserved
+    lum = lambda f: slog3_oetf(np.array([float(np.array(LUM709, np.float64) @ (lut[img[0, i * pw]].astype(np.float64)))
+                                         for i in range(len(patches))], np.float32))
+    f1 = to_slog3_frame(img, lut, mat, 1.0, "full", rng, False, 0.0)
+    f1b = to_slog3_frame(img, lut, mat, 1.0, "full", rng, False, 0.0, saturation=1.0)
+    f0 = to_slog3_frame(img, lut, mat, 1.0, "full", rng, False, 0.0, saturation=0.0)
+    fh = to_slog3_frame(img, lut, mat, 1.0, "full", rng, False, 0.0, saturation=0.5)
+    mid = h // 2
+    grey_same = all(np.array_equal(f0[:, mid, i * pw + 1], f1[:, mid, i * pw + 1]) for i in range(3))
+    neutral = int(np.abs(f0[1:, mid, :].astype(int) - 512).max())
+    chroma = lambda f: float(np.abs(f[1:, mid, 3 * pw:].astype(int) - 512).mean())
+    # with saturation 0 every patch becomes the S-Log3 code of its own luminance (luma ~= that code)
+    lum_codes = lum(None) * 1023.0
+    y0 = np.array([f0[0, mid, i * pw + 1] for i in range(len(patches))], float)
+    good = (np.array_equal(f1, f1b) and grey_same and neutral <= 1
+            and chroma(fh) < chroma(f1) and np.abs(y0 - lum_codes).max() <= 1.0)
+    ok &= good
+    print(f"saturation: 1.0 identity, grey untouched {grey_same}, s=0 max |C-512| = {neutral}, "
+          f"chroma s=1/0.5 = {chroma(f1):.1f}/{chroma(fh):.1f}, s=0 luma vs luminance code max err "
+          f"{np.abs(y0 - lum_codes).max():.2f}  {'OK' if good else 'FAIL'}")
     print("SELFTEST", "PASSED" if ok else "FAILED")
     return 0 if ok else 1
 
@@ -473,6 +504,9 @@ def main():
     p.add_argument("--no-dither", action="store_true")
     p.add_argument("--grain", type=float, default=0.0,
                    help="gaussian luma grain, sigma in 10-bit code values (try 1.0-2.5)")
+    p.add_argument("--saturation", type=float, default=1.0,
+                   help="scene-linear, luminance-preserving saturation before the log curve "
+                        "(1 = untouched; AI clips are pre-rendered, try 0.6-0.8)")
     p.add_argument("--range", default="legal", choices=["legal", "full"])
     p.add_argument("--matrix", default="auto", choices=["auto", "bt709", "bt601"])
     p.add_argument("--frames", type=int, default=0, help="only process the first N frames (0 = all)")

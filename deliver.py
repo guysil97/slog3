@@ -91,7 +91,22 @@ def slog3_to_rec709(yuv_planar, w, h, exposure, gamma):
     return lin ** (1 / float(gamma))
 
 
-def verify_alignment(ff, src, out, n, exposure, gamma):
+def desaturate_display(rgb, gamma, sat):
+    """Apply the tool's scene-linear saturation to display RGB 0..1 (for comparison only)."""
+    if sat == 1.0:
+        return rgb
+    if gamma == "srgb":
+        lin = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+    else:
+        lin = rgb ** float(gamma)
+    lum = (lin @ np.array([0.2126, 0.7152, 0.0722]))[..., None]
+    lin = np.clip(lum + sat * (lin - lum), 0, 1)
+    if gamma == "srgb":
+        return np.where(lin <= 0.0031308, lin * 12.92, 1.055 * lin ** (1 / 2.4) - 0.055)
+    return lin ** (1 / float(gamma))
+
+
+def verify_alignment(ff, src, out, n, exposure, gamma, sat=1.0):
     w, h = 636, 270
     checks = sorted({1, n // 2, n - 2})
     want = sorted({j for i in checks for j in (i - 1, i, i + 1) if 0 <= j < n})
@@ -100,7 +115,7 @@ def verify_alignment(ff, src, out, n, exposure, gamma):
     if len(s) != len(want) or len(o) != len(checks):
         print(f"[verify] FAIL could not decode check frames ({len(s)}/{len(want)}, {len(o)}/{len(checks)})")
         return False
-    src_frames = {j: s[k].reshape(h, w, 3) / 65535.0 for k, j in enumerate(want)}
+    src_frames = {j: desaturate_display(s[k].reshape(h, w, 3) / 65535.0, gamma, sat) for k, j in enumerate(want)}
     ok = True
     for k, i in enumerate(checks):
         back = slog3_to_rec709(o[k], w, h, exposure, gamma)
@@ -146,12 +161,14 @@ def main():
     p.add_argument("--split-mb", type=int, default=0, help="split output into parts of N MiB (0 = no)")
     a = p.parse_args(argv)
 
-    conv = argparse.Namespace(gamma="2.4", exposure=0.0)
+    conv = argparse.Namespace(gamma="2.4", exposure=0.0, saturation=1.0)
     for k, v in zip(passthrough, passthrough[1:] + [None]):
         if k == "--gamma":
             conv.gamma = v
         elif k == "--exposure":
             conv.exposure = float(v)
+        elif k == "--saturation":
+            conv.saturation = float(v)
 
     wd = Path(a.workdir or Path(a.src).resolve().parent / f"{a.name}_job")
     wd.mkdir(parents=True, exist_ok=True)
@@ -176,7 +193,7 @@ def main():
     n_out, rate_out = count_frames(fp, out)
     same = n_out == n_src and rate_out == rate_src
     print(f"[verify] frames {n_out} vs {n_src}, rate {rate_out} vs {rate_src}  {'OK' if same else 'FAIL'}")
-    aligned = verify_alignment(ff, src, out, n_src, conv.exposure, conv.gamma)
+    aligned = verify_alignment(ff, src, out, n_src, conv.exposure, conv.gamma, conv.saturation)
     if not (same and aligned):
         sys.exit("ERROR: verification failed - do not deliver")
 

@@ -98,3 +98,21 @@ Luma codes: 0.1% = 97, median = 133, 99.9% = 559, max = 614. Superseded by the s
   299 frames, 296 MiB, sha256 2c9ab8a1a00f88f8fef224dc6acb52b5e6f75022022673bc674e1d8a31afaecb.
 - If the original was 300 frames, the uploaded segments end one frame short (last = 298).
 - A 5K version needs the ORIGINAL file (byte `split`, not a Resolve export).
+
+## Saturation (user feedback after Resolve test, v2)
+- User report: after log -> colour in Resolve the grinder looked over-saturated and unrealistic.
+- Cause: the AI clip is a *rendered* image (display LUT's contrast/saturation baked in). Inverting only
+  the gamma leaves that saturation inside the log; the colourist's log->display transform (LUT / CST
+  with tone mapping) adds it again. Through a plain CST (no tone mapping, -2 stops) the old file
+  returns exactly to the AI image, so the maths was right; the AI image is just far more saturated
+  than FX6 footage.
+- Measured in the log domain (median max-min of S-Log3 RGB codes, luma 250-350 / 350-450 / p99 all):
+  FX6 scene 15 / 10 / 62; AI sat 1.0 63 / 71 / 142; sat 0.75 46 / 53 / 105; sat 0.6 36 / 42 / 83.
+  (Content differs - grey hazy kitchen vs red meat - so do not chase the FX6 numbers exactly.)
+- New option `--saturation S`: scene-linear, luminance-preserving (Rec.709 weights), applied after
+  exposure and before the gamut matrix. 1.0 is bit-identical to before (selftest). deliver.py applies
+  the same desaturation to the source before its alignment check.
+- Delivered v2: `--gamma 2.4 --exposure 2 --no-deband --saturation 0.6` (recommended) and 0.75.
+  0.45 looked grey/lifeless in the simulated CST.
+- Still unknown: the exact transform the user/colourist uses in Resolve. If it is a LUT (.cube), the
+  exact fix is to invert that LUT numerically instead of a global saturation factor.
